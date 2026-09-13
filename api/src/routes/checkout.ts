@@ -1,16 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { decreaseStock, findProduct } from '../data/products.js'
-
-interface CheckoutBody {
-  productId?: unknown
-  quantity?: unknown
-}
-
-type ErrorCode =
-  | 'VALIDATION_ERROR'
-  | 'PRODUCT_NOT_FOUND'
-  | 'INSUFFICIENT_STOCK'
-  | 'SERVICE_UNAVAILABLE'
+import type { CheckoutBody, ErrorCode } from '../types/index.js'
 
 function fail(
   reply: FastifyReply,

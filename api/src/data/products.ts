@@ -1,9 +1,4 @@
-export interface Product {
-  id: number
-  name: string
-  stock: number
-  value: number
-}
+import type { Product } from '../types/index.js'
 
 const products: Product[] = [
   { id: 1, name: 'Capinha Azul', stock: 2, value: 10 },

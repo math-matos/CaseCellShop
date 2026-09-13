@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Header } from './components/Header'
 import { ProductCard } from './components/ProductCard'
 import { ApiError } from './lib/ApiError'
 import { checkout, fetchProducts } from './lib/api'
@@ -76,14 +77,9 @@ function App() {
 
   return (
     <div className="min-h-screen bg-[#FFF8E1] px-4 py-10">
-      <div className="mx-auto max-w-4xl">
-        <h1 className="font-poppins text-2xl font-bold text-slate-900 md:text-3xl">
-          CaseCellShop
-        </h1>
-        <p className="mt-1 font-quicksand text-slate-600">
-          Escolha uma capinha e finalize sua compra.
-        </p>
+      <Header />
 
+      <main className="mx-auto max-w-4xl">
         {feedback && (
           <p
             role="status"
@@ -127,7 +123,7 @@ function App() {
             ))}
           </div>
         )}
-      </div>
+      </main>
     </div>
   )
 }

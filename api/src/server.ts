@@ -1,17 +1,21 @@
 import Fastify from 'fastify'
+import cors from '@fastify/cors'
+import { productRoutes } from './routes/products.js'
+import { checkoutRoutes } from './routes/checkout.js'
 
 const app = Fastify({ logger: false })
 
+await app.register(cors, { origin: true })
+
 app.get('/', async () => ({ status: 'ok' }))
 
-app.get('/products', async () => ({
-  products: [
-    { id: 1, name: 'Capinha Azul', stock: 2, value: 10 },
-    { id: 2, name: 'Capinha Vermelha', stock: 5, value: 15 },
-    { id: 3, name: 'Capinha Verde', stock: 3, value: 20 },
-  ],
-}))
+await app.register(productRoutes)
+await app.register(checkoutRoutes)
 
-app.get('/cart', async () => ({ cart: [] }))
-
-app.listen({ port: 3333 }, () => {})
+app.listen({ port: 3333 }, (err) => {
+  if (err) {
+    console.error(err)
+    process.exit(1)
+  }
+  console.log('API rodando em http://localhost:3333')
+})

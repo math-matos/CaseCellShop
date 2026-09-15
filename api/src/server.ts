@@ -1,21 +1,12 @@
-import Fastify from 'fastify'
-import cors from '@fastify/cors'
-import { productRoutes } from './routes/products.js'
-import { checkoutRoutes } from './routes/checkout.js'
+import { buildApp } from './app.js'
 
-const app = Fastify({ logger: false })
+const port = Number(process.env.PORT ?? 3333)
+const app = buildApp({ logger: false })
 
-await app.register(cors, { origin: true })
-
-app.get('/', async () => ({ status: 'ok' }))
-
-await app.register(productRoutes)
-await app.register(checkoutRoutes)
-
-app.listen({ port: 3333 }, (err) => {
+app.listen({ port }, (err, address) => {
   if (err) {
-    console.error(err)
+    app.log.error(err)
     process.exit(1)
   }
-  console.log('API rodando em http://localhost:3333')
+  app.log.info(`API rodando em ${address}`)
 })

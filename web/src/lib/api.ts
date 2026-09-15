@@ -1,34 +1,96 @@
-import type { Order, Product } from '../types'
+import type { ApiErrorCode, ErrorResponse, Order, Product } from '../types'
 import { ApiError } from './ApiError'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3333'
+const API_TOKEN = import.meta.env.VITE_API_TOKEN ?? 'demo-token'
+
+const GENERIC_CHECKOUT_ERROR =
+  'Nao foi possivel concluir a compra. Tente novamente.'
+const NETWORK_ERROR =
+  'Nao foi possivel conectar ao servidor. Verifique sua conexao e tente novamente.'
+
+export function newIdempotencyKey(): string {
+  return crypto.randomUUID()
+}
+
+async function parseError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<ApiError> {
+  const correlationId =
+    response.headers.get('x-correlation-id') ?? undefined
+
+  let payload: Partial<ErrorResponse> = {}
+  try {
+    payload = (await response.json()) as Partial<ErrorResponse>
+  } catch {
+  }
+
+  return new ApiError(
+    payload.error?.message ?? fallbackMessage,
+    payload.error?.code ?? (`SERVER_ERROR` as ApiErrorCode),
+    response.status,
+    payload.error?.correlationId ?? correlationId,
+  )
+}
 
 export async function fetchProducts(): Promise<Product[]> {
-  const response = await fetch(`${API_URL}/products`)
-  if (!response.ok) {
-    throw new ApiError('Nao foi possivel carregar os produtos. Tente novamente.')
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}/products`)
+  } catch {
+    throw new ApiError(NETWORK_ERROR, 'NETWORK_ERROR')
   }
+
+  if (!response.ok) {
+    throw await parseError(
+      response,
+      'Nao foi possivel carregar os produtos. Tente novamente.',
+    )
+  }
+
   const data = (await response.json()) as { products: Product[] }
   return data.products
 }
 
-export async function checkout(productId: number, quantity: number): Promise<Order> {
+export interface CheckoutOptions {
+  /**
+   * Chave da tentativa de compra. Deve ser reaproveitada em um retry do mesmo
+   * clique para que o servidor nao crie um segundo pedido.
+   */
+  idempotencyKey: string
+  correlationId?: string
+}
+
+export async function checkout(
+  productId: number,
+  quantity: number,
+  options: CheckoutOptions,
+): Promise<Order> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${API_TOKEN}`,
+    'Idempotency-Key': options.idempotencyKey,
+  }
+
+  if (options.correlationId) {
+    headers['X-Correlation-Id'] = options.correlationId
+  }
+
   let response: Response
   try {
     response = await fetch(`${API_URL}/checkout`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ productId, quantity }),
     })
   } catch {
-    throw new ApiError('Nao foi possivel conectar ao servidor. Verifique sua conexao e tente novamente.')
+    throw new ApiError(NETWORK_ERROR, 'NETWORK_ERROR')
   }
-
-  const data = (await response.json()) as Partial<Order> & { error?: { message: string } }
 
   if (!response.ok) {
-    throw new ApiError(data.error?.message ?? 'Nao foi possivel concluir a compra. Tente novamente.')
+    throw await parseError(response, GENERIC_CHECKOUT_ERROR)
   }
 
-  return data as Order
+  return (await response.json()) as Order
 }

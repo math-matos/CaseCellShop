@@ -53,7 +53,7 @@ function App() {
         (current) =>
           current?.map((entry) =>
             entry.id === item.productId
-              ? { ...entry, stock: order.remainingStock }
+              ? { ...entry, stock: entry.stock - item.quantity }
               : entry,
           ) ?? current,
       )

@@ -74,7 +74,6 @@ export async function checkoutRoutes(app: FastifyInstance): Promise<void> {
       ],
       total: product.value * quantityNumber,
       createdAt: new Date().toISOString(),
-      remainingStock: product.stock,
     }
 
     return reply.status(201).send(order)

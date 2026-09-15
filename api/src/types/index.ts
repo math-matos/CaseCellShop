@@ -20,7 +20,6 @@ export interface Order {
   items: OrderItem[]
   total: number
   createdAt: string
-  remainingStock: number
 }
 
 export type ErrorCode =

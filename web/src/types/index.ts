@@ -5,13 +5,21 @@ export interface Product {
   value: number
 }
 
-export interface Order {
-  id: string
+export interface OrderItem {
   productId: number
   productName: string
   quantity: number
-  unitValue: number
+  unitPrice: number
+}
+
+export type OrderStatus = 'pending' | 'confirmed'
+
+export interface Order {
+  orderId: string
+  status: OrderStatus
+  items: OrderItem[]
   total: number
+  createdAt: string
   remainingStock: number
 }
 

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { decreaseStock, findProduct } from '../data/products.js'
-import type { CheckoutBody, ErrorCode } from '../types/index.js'
+import type { CheckoutBody, ErrorCode, Order } from '../types/index.js'
 
 function fail(
   reply: FastifyReply,
@@ -61,16 +61,22 @@ export async function checkoutRoutes(app: FastifyInstance): Promise<void> {
     const quantityNumber = quantity as number
     decreaseStock(product, quantityNumber)
 
-    return reply.status(201).send({
-      order: {
-        id: `order_${crypto.randomUUID()}`,
-        productId: product.id,
-        productName: product.name,
-        quantity: quantityNumber,
-        unitValue: product.value,
-        total: product.value * quantityNumber,
-        remainingStock: product.stock,
-      },
-    })
+    const order: Order = {
+      orderId: `order_${crypto.randomUUID()}`,
+      status: 'confirmed',
+      items: [
+        {
+          productId: product.id,
+          productName: product.name,
+          quantity: quantityNumber,
+          unitPrice: product.value,
+        },
+      ],
+      total: product.value * quantityNumber,
+      createdAt: new Date().toISOString(),
+      remainingStock: product.stock,
+    }
+
+    return reply.status(201).send(order)
   })
 }

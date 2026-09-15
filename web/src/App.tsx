@@ -47,19 +47,20 @@ function App() {
 
     try {
       const order = await checkout(product.id, quantity)
+      const [item] = order.items
 
       setProducts(
         (current) =>
-          current?.map((item) =>
-            item.id === order.productId
-              ? { ...item, stock: order.remainingStock }
-              : item,
+          current?.map((entry) =>
+            entry.id === item.productId
+              ? { ...entry, stock: order.remainingStock }
+              : entry,
           ) ?? current,
       )
-      setQuantities((current) => ({ ...current, [order.productId]: 1 }))
+      setQuantities((current) => ({ ...current, [item.productId]: 1 }))
       setFeedback({
         type: 'success',
-        message: `Compra confirmada! Pedido ${order.id}: ${order.quantity}x ${order.productName} - total de ${formatCurrency(order.total)}.`,
+        message: `Compra confirmada! Pedido ${order.orderId}: ${item.quantity}x ${item.productName} - total de ${formatCurrency(order.total)}.`,
       })
     } catch (error) {
       setFeedback({

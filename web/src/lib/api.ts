@@ -24,11 +24,11 @@ export async function checkout(productId: number, quantity: number): Promise<Ord
     throw new ApiError('Nao foi possivel conectar ao servidor. Verifique sua conexao e tente novamente.')
   }
 
-  const data = (await response.json()) as { order?: Order; error?: { message: string } }
+  const data = (await response.json()) as Partial<Order> & { error?: { message: string } }
 
   if (!response.ok) {
     throw new ApiError(data.error?.message ?? 'Nao foi possivel concluir a compra. Tente novamente.')
   }
 
-  return data.order as Order
+  return data as Order
 }

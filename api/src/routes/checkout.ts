@@ -21,8 +21,7 @@ export async function checkoutRoutes(app: FastifyInstance): Promise<void> {
       {
         correlationId: request.correlationId,
         orderId: order.orderId,
-        productId: input.productId,
-        quantity: input.quantity,
+        items: input.items,
         replayed,
       },
       replayed ? 'checkout replayed' : 'checkout confirmed',

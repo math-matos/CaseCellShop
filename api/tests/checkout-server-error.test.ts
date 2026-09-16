@@ -6,7 +6,7 @@ vi.mock('../src/data/products.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/data/products.js')>()
   return {
     ...original,
-    reserveStock: vi.fn(() => {
+    reserveStockBatch: vi.fn(() => {
       throw new Error('Falha inesperada na camada de dados')
     }),
   }

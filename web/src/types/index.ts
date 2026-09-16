@@ -38,7 +38,24 @@ export interface ErrorResponse {
     code: ApiErrorCode
     message: string
     correlationId: string
+    /** Item culpado em erros de estoque/produto, para destacar no carrinho. */
+    productId?: number
   }
+}
+
+/** Uma linha do carrinho. O preco unitario e guardado so para exibir o
+ * subtotal no front — o valor cobrado sempre vem do catalogo no backend. */
+export interface CartItem {
+  productId: number
+  name: string
+  unitPrice: number
+  quantity: number
+}
+
+/** Item enviado ao checkout. O preco nunca vai no corpo — sai do catalogo. */
+export interface CheckoutItem {
+  productId: number
+  quantity: number
 }
 
 export interface Feedback {

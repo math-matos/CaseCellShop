@@ -96,10 +96,12 @@ describe('checkout - contrato da requisicao', () => {
     createdAt: '2026-09-15T12:00:00.000Z',
   }
 
+  const items = [{ productId: 1, quantity: 2 }]
+
   it('envia Authorization, Idempotency-Key e Content-Type', async () => {
     fetchMock.mockResolvedValue(jsonResponse(order, { status: 201 }))
 
-    await checkout(1, 2, { idempotencyKey: 'chave-fixa' })
+    await checkout(items, { idempotencyKey: 'chave-fixa' })
 
     const [, init] = fetchMock.mock.calls[0]
     expect(init.method).toBe('POST')
@@ -113,7 +115,7 @@ describe('checkout - contrato da requisicao', () => {
   it('envia X-Correlation-Id quando informado', async () => {
     fetchMock.mockResolvedValue(jsonResponse(order, { status: 201 }))
 
-    await checkout(1, 2, {
+    await checkout(items, {
       idempotencyKey: 'chave-fixa',
       correlationId: 'corr-1',
     })
@@ -122,21 +124,32 @@ describe('checkout - contrato da requisicao', () => {
     expect(init.headers['X-Correlation-Id']).toBe('corr-1')
   })
 
-  it('nao envia preco no body', async () => {
+  it('envia os itens em items e sem preco no body', async () => {
     fetchMock.mockResolvedValue(jsonResponse(order, { status: 201 }))
 
-    await checkout(1, 2, { idempotencyKey: 'chave-fixa' })
+    await checkout(
+      [
+        { productId: 1, quantity: 2 },
+        { productId: 2, quantity: 1 },
+      ],
+      { idempotencyKey: 'chave-fixa' },
+    )
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(init.body)).toEqual({ productId: 1, quantity: 2 })
+    expect(JSON.parse(init.body)).toEqual({
+      items: [
+        { productId: 1, quantity: 2 },
+        { productId: 2, quantity: 1 },
+      ],
+    })
   })
 
   it('devolve o pedido em caso de sucesso', async () => {
     fetchMock.mockResolvedValue(jsonResponse(order, { status: 201 }))
 
-    await expect(checkout(1, 2, { idempotencyKey: 'chave-fixa' })).resolves.toEqual(
-      order,
-    )
+    await expect(
+      checkout(items, { idempotencyKey: 'chave-fixa' }),
+    ).resolves.toEqual(order)
   })
 })
 
@@ -149,19 +162,23 @@ describe('checkout - tratamento de erro', () => {
             code: 'INSUFFICIENT_STOCK',
             message: 'Capinha Verde está esgotado no momento.',
             correlationId: 'corr-9',
+            productId: 3,
           },
         },
         { status: 409 },
       ),
     )
 
-    const error = await captureApiError(checkout(3, 1, { idempotencyKey: 'k' }))
+    const error = await captureApiError(
+      checkout([{ productId: 3, quantity: 1 }], { idempotencyKey: 'k' }),
+    )
 
     expect(error).toBeInstanceOf(ApiError)
     expect(error.message).toBe('Capinha Verde está esgotado no momento.')
     expect(error.code).toBe('INSUFFICIENT_STOCK')
     expect(error.status).toBe(409)
     expect(error.correlationId).toBe('corr-9')
+    expect(error.productId).toBe(3)
     expect(error.requiresCatalogRefresh).toBe(true)
     expect(error.isRetryable).toBe(false)
   })
@@ -169,7 +186,7 @@ describe('checkout - tratamento de erro', () => {
   it('marca falha de rede como retentavel', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
 
-    const error = await captureApiError(checkout(1, 1, { idempotencyKey: 'k' }))
+    const error = await captureApiError(checkout([{ productId: 1, quantity: 1 }], { idempotencyKey: 'k' }))
 
     expect(error.code).toBe('NETWORK_ERROR')
     expect(error.isRetryable).toBe(true)
@@ -189,7 +206,7 @@ describe('checkout - tratamento de erro', () => {
       ),
     )
 
-    const error = await captureApiError(checkout(1, 1, { idempotencyKey: 'k' }))
+    const error = await captureApiError(checkout([{ productId: 1, quantity: 1 }], { idempotencyKey: 'k' }))
 
     expect(error.isRetryable).toBe(true)
   })
@@ -208,7 +225,9 @@ describe('checkout - tratamento de erro', () => {
       ),
     )
 
-    const error = await captureApiError(checkout(1, 0, { idempotencyKey: 'k' }))
+    const error = await captureApiError(
+      checkout([{ productId: 1, quantity: 0 }], { idempotencyKey: 'k' }),
+    )
 
     expect(error.isRetryable).toBe(false)
     expect(error.requiresCatalogRefresh).toBe(false)
@@ -217,7 +236,7 @@ describe('checkout - tratamento de erro', () => {
   it('cai na mensagem generica quando a resposta de erro nao tem corpo JSON', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 500 }))
 
-    const error = await captureApiError(checkout(1, 1, { idempotencyKey: 'k' }))
+    const error = await captureApiError(checkout([{ productId: 1, quantity: 1 }], { idempotencyKey: 'k' }))
 
     expect(error.message).toBe('Nao foi possivel concluir a compra. Tente novamente.')
     expect(error.code).toBe('SERVER_ERROR')

@@ -426,6 +426,156 @@ describe('POST /checkout - idempotencia (cenarios 7 e 8)', () => {
   })
 })
 
+describe('POST /checkout - carrinho com varios itens', () => {
+  beforeEach(async () => {
+    await boot()
+  })
+
+  it('compra vários itens em um único pedido e debita cada estoque', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers: buildHeaders(),
+      payload: {
+        items: [
+          { productId: 1, quantity: 2 },
+          { productId: 2, quantity: 3 },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+
+    const order = response.json()
+    expect(order.status).toBe('confirmed')
+    expect(order.total).toBe(2 * 10 + 3 * 15)
+    expect(order.items).toEqual([
+      { productId: 1, productName: 'Capinha Azul', quantity: 2, unitPrice: 10 },
+      {
+        productId: 2,
+        productName: 'Capinha Vermelha',
+        quantity: 3,
+        unitPrice: 15,
+      },
+    ])
+
+    expect(await stockOf(1)).toBe(0)
+    expect(await stockOf(2)).toBe(2)
+  })
+
+  it('é tudo-ou-nada: se um item falta estoque, nada é debitado', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers: buildHeaders(),
+      payload: {
+        items: [
+          { productId: 1, quantity: 2 }, // ok
+          { productId: 2, quantity: 99 }, // excede o estoque
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(409)
+    expect(response.json().error).toMatchObject({
+      code: 'INSUFFICIENT_STOCK',
+      productId: 2,
+    })
+
+    // Nenhum item foi debitado — o pedido inteiro falhou.
+    expect(await stockOf(1)).toBe(2)
+    expect(await stockOf(2)).toBe(5)
+  })
+
+  it('aponta o productId inexistente no erro 404', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers: buildHeaders(),
+      payload: {
+        items: [
+          { productId: 1, quantity: 1 },
+          { productId: 999, quantity: 1 },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(404)
+    expect(response.json().error).toMatchObject({
+      code: 'PRODUCT_NOT_FOUND',
+      productId: 999,
+    })
+    expect(await stockOf(1)).toBe(2)
+  })
+
+  it('soma quantidades do mesmo produto repetido no carrinho', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers: buildHeaders(),
+      payload: {
+        items: [
+          { productId: 1, quantity: 1 },
+          { productId: 1, quantity: 1 },
+        ],
+      },
+    })
+
+    expect(response.statusCode).toBe(201)
+    expect(await stockOf(1)).toBe(0)
+  })
+
+  it('devolve 400 quando items é uma lista vazia', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers: buildHeaders(),
+      payload: { items: [] },
+    })
+
+    expect(response.statusCode).toBe(400)
+    expect(response.json().error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('a mesma chave replica o pedido independentemente da ordem dos itens', async () => {
+    const headers = buildHeaders()
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers,
+      payload: {
+        items: [
+          { productId: 1, quantity: 1 },
+          { productId: 2, quantity: 1 },
+        ],
+      },
+    })
+
+    // Mesma chave, mesmos itens em ordem trocada -> replay do pedido original.
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/checkout',
+      headers,
+      payload: {
+        items: [
+          { productId: 2, quantity: 1 },
+          { productId: 1, quantity: 1 },
+        ],
+      },
+    })
+
+    expect(first.statusCode).toBe(201)
+    expect(replay.statusCode).toBe(201)
+    expect(replay.headers['idempotency-replayed']).toBe('true')
+    expect(replay.json().orderId).toBe(first.json().orderId)
+
+    // Debitado uma unica vez.
+    expect(await stockOf(1)).toBe(1)
+    expect(await stockOf(2)).toBe(4)
+  })
+})
+
 describe('POST /checkout - race condition (cenario 2)', () => {
   it('apenas uma requisicao leva o ultimo item em estoque', async () => {
     await boot([{ id: 1, name: 'Capinha Azul', stock: 1, value: 10 }])

@@ -1,4 +1,10 @@
-import type { ApiErrorCode, ErrorResponse, Order, Product } from '../types'
+import type {
+  ApiErrorCode,
+  CheckoutItem,
+  ErrorResponse,
+  Order,
+  Product,
+} from '../types'
 import { ApiError } from './ApiError'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3333'
@@ -31,6 +37,7 @@ async function parseError(
     payload.error?.code ?? (`SERVER_ERROR` as ApiErrorCode),
     response.status,
     payload.error?.correlationId ?? correlationId,
+    payload.error?.productId,
   )
 }
 
@@ -63,8 +70,7 @@ export interface CheckoutOptions {
 }
 
 export async function checkout(
-  productId: number,
-  quantity: number,
+  items: CheckoutItem[],
   options: CheckoutOptions,
 ): Promise<Order> {
   const headers: Record<string, string> = {
@@ -77,12 +83,20 @@ export async function checkout(
     headers['X-Correlation-Id'] = options.correlationId
   }
 
+  // So enviamos productId e quantity — o preco sempre sai do catalogo no back.
+  const payload = {
+    items: items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+    })),
+  }
+
   let response: Response
   try {
     response = await fetch(`${API_URL}/checkout`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ productId, quantity }),
+      body: JSON.stringify(payload),
     })
   } catch {
     throw new ApiError(NETWORK_ERROR, 'NETWORK_ERROR')

@@ -4,18 +4,22 @@ export class ApiError extends Error {
   readonly code: ApiErrorCode
   readonly status: number
   readonly correlationId?: string
+  /** Item culpado em erros de estoque/produto. */
+  readonly productId?: number
 
   constructor(
     message: string,
     code: ApiErrorCode = 'SERVER_ERROR',
     status = 0,
     correlationId?: string,
+    productId?: number,
   ) {
     super(message)
     this.name = 'ApiError'
     this.code = code
     this.status = status
     this.correlationId = correlationId
+    this.productId = productId
   }
 
   /**

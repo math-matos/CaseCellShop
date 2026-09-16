@@ -7,12 +7,20 @@ import type { ErrorCode } from '../types/index.js'
 export class AppError extends Error {
   readonly statusCode: number
   readonly code: ErrorCode
+  /** Item culpado, em erros de estoque/produto. */
+  readonly productId?: number
 
-  constructor(statusCode: number, code: ErrorCode, message: string) {
+  constructor(
+    statusCode: number,
+    code: ErrorCode,
+    message: string,
+    productId?: number,
+  ) {
     super(message)
     this.name = 'AppError'
     this.statusCode = statusCode
     this.code = code
+    this.productId = productId
   }
 }
 
@@ -42,7 +50,14 @@ export const errors = {
     new AppError(
       400,
       'VALIDATION_ERROR',
-      'Corpo da requisição inválido. Envie um JSON com productId e quantity.',
+      'Corpo da requisição inválido. Envie um JSON com a lista de items.',
+    ),
+
+  emptyCart: () =>
+    new AppError(
+      400,
+      'VALIDATION_ERROR',
+      'Informe ao menos um item para concluir a compra.',
     ),
 
   invalidIdempotencyKey: () =>
@@ -52,21 +67,32 @@ export const errors = {
       'Informe um Idempotency-Key válido no formato UUID.',
     ),
 
-  productNotFound: () =>
-    new AppError(404, 'PRODUCT_NOT_FOUND', 'Produto não encontrado.'),
+  productNotFound: (productId?: number) =>
+    new AppError(
+      404,
+      'PRODUCT_NOT_FOUND',
+      'Produto não encontrado.',
+      productId,
+    ),
 
-  outOfStock: (productName: string) =>
+  outOfStock: (productName: string, productId?: number) =>
     new AppError(
       409,
       'INSUFFICIENT_STOCK',
       `${productName} está esgotado no momento.`,
+      productId,
     ),
 
-  insufficientStock: (productName: string, available: number) =>
+  insufficientStock: (
+    productName: string,
+    available: number,
+    productId?: number,
+  ) =>
     new AppError(
       409,
       'INSUFFICIENT_STOCK',
       `Estoque insuficiente: restam apenas ${available} unidade(s) de ${productName}.`,
+      productId,
     ),
 
   idempotencyKeyReuse: () =>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CartDrawer, type LineError } from './components/CartDrawer'
 import { Header } from './components/Header'
 import { ProductCard } from './components/ProductCard'
+import { useCart } from './hooks/useCart'
 import { ApiError } from './lib/ApiError'
 import { checkout, fetchProducts, newIdempotencyKey } from './lib/api'
 import type { Feedback, Product } from './types'
@@ -10,19 +12,27 @@ function App() {
   const [products, setProducts] = useState<Product[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [quantities, setQuantities] = useState<Record<number, number>>({})
-  const [processingId, setProcessingId] = useState<number | null>(null)
+  const [isCartOpen, setIsCartOpen] = useState(false)
+  const [isCheckingOut, setIsCheckingOut] = useState(false)
   const [feedback, setFeedback] = useState<Feedback | null>(null)
-  const isSubmittingRef = useRef(false)
+  const [lineErrors, setLineErrors] = useState<Record<number, LineError>>({})
+  const [retryableFailure, setRetryableFailure] = useState(false)
+
+  const cart = useCart()
 
   /**
-   * Idempotency-Key por tentativa de compra.
+   * Idempotency-Key da tentativa de finalizar o carrinho.
    *
-   * A chave e criada no primeiro clique e so e descartada quando a compra tem
-   * um desfecho definitivo. Em falha de rede ou 503 ela e preservada: o proximo
-   * clique retenta com a MESMA chave, entao se o pedido chegou a ser criado no
-   * servidor o cliente recebe o pedido original em vez de comprar duas vezes.
+   * A chave e criada na primeira tentativa e so e descartada quando a compra tem
+   * um desfecho definitivo (sucesso, ou erro de negocio). Em falha de rede ou 503
+   * ela e PRESERVADA: o "Tentar novamente" retenta com a MESMA chave, entao se o
+   * pedido chegou a ser criado no servidor o cliente recebe o pedido original em
+   * vez de comprar duas vezes.
+   *
+   * Qualquer mudanca no carrinho invalida a chave: o payload mudou, entao aquela
+   * tentativa deixou de existir (retentar com a mesma chave viraria 422).
    */
-  const pendingKeysRef = useRef<Record<number, string>>({})
+  const pendingKeyRef = useRef<string | null>(null)
 
   const loadProducts = useCallback(
     () =>
@@ -46,84 +56,138 @@ function App() {
     void loadProducts()
   }, [loadProducts])
 
+  /** Descarta o estado da ultima tentativa quando o carrinho muda. */
+  function resetCheckoutAttempt() {
+    pendingKeyRef.current = null
+    setRetryableFailure(false)
+    setLineErrors({})
+    setFeedback(null)
+  }
+
   function changeQuantity(product: Product, delta: number) {
+    const inCart =
+      cart.items.find((item) => item.productId === product.id)?.quantity ?? 0
+    const room = Math.max(product.stock - inCart, 1)
     setQuantities((current) => {
       const next = (current[product.id] ?? 1) + delta
-      const clamped = Math.min(Math.max(next, 1), Math.max(product.stock, 1))
-      return { ...current, [product.id]: clamped }
+      return { ...current, [product.id]: Math.min(Math.max(next, 1), room) }
     })
   }
 
-  async function handleBuy(product: Product) {
-    if (isSubmittingRef.current || product.stock < 1) {
+  function handleAddToCart(product: Product) {
+    const quantity = quantities[product.id] ?? 1
+    cart.addItem(product, quantity)
+    setQuantities((current) => ({ ...current, [product.id]: 1 }))
+    resetCheckoutAttempt()
+  }
+
+  function changeCartQuantity(productId: number, delta: number) {
+    const product = products?.find((entry) => entry.id === productId)
+    const max = product ? Math.max(product.stock, 1) : Number.MAX_SAFE_INTEGER
+    const current =
+      cart.items.find((item) => item.productId === productId)?.quantity ?? 1
+    cart.setQuantity(productId, Math.min(Math.max(current + delta, 1), max))
+    resetCheckoutAttempt()
+  }
+
+  function removeFromCart(productId: number) {
+    cart.removeItem(productId)
+    resetCheckoutAttempt()
+  }
+
+  async function handleCheckout() {
+    if (isCheckingOut || cart.items.length === 0) {
       return
     }
 
-    isSubmittingRef.current = true
-    setProcessingId(product.id)
+    setIsCheckingOut(true)
     setFeedback(null)
+    setLineErrors({})
+    setRetryableFailure(false)
 
-    const quantity = quantities[product.id] ?? 1
-    const idempotencyKey =
-      pendingKeysRef.current[product.id] ?? newIdempotencyKey()
-    pendingKeysRef.current[product.id] = idempotencyKey
+    // Reusa a chave preservada de um retry; senao cria uma nova para a tentativa.
+    const idempotencyKey = pendingKeyRef.current ?? newIdempotencyKey()
+    pendingKeyRef.current = idempotencyKey
 
     try {
-      const order = await checkout(product.id, quantity, { idempotencyKey })
-      const [item] = order.items
+      const order = await checkout(
+        cart.items.map((item) => ({
+          productId: item.productId,
+          quantity: item.quantity,
+        })),
+        { idempotencyKey },
+      )
 
-      delete pendingKeysRef.current[product.id]
+      pendingKeyRef.current = null
 
+      // Debita o estoque local de cada item do pedido.
       setProducts(
         (current) =>
-          current?.map((entry) =>
-            entry.id === item.productId
-              ? { ...entry, stock: Math.max(entry.stock - item.quantity, 0) }
-              : entry,
-          ) ?? current,
+          current?.map((entry) => {
+            const line = order.items.find((item) => item.productId === entry.id)
+            return line
+              ? { ...entry, stock: Math.max(entry.stock - line.quantity, 0) }
+              : entry
+          }) ?? current,
       )
-      setQuantities((current) => ({ ...current, [item.productId]: 1 }))
+
+      cart.clear()
+      setIsCartOpen(false)
       setFeedback({
         type: 'success',
-        message: `Compra confirmada! Pedido ${order.orderId}: ${item.quantity}x ${item.productName} - total de ${formatCurrency(order.total)}.`,
+        message: `Compra concluída! Pedido ${order.orderId} com ${
+          order.items.length
+        } ${order.items.length === 1 ? 'item' : 'itens'} — total de ${formatCurrency(order.total)}.`,
       })
     } catch (error) {
       const apiError = error instanceof ApiError ? error : null
+      const retryable = apiError?.isRetryable ?? false
 
-      if (!apiError?.isRetryable) {
-        delete pendingKeysRef.current[product.id]
+      // Erro de negocio (estoque/validacao): o cliente precisa ajustar, entao
+      // liberamos a chave. Falha de rede/503: preservamos para o retry seguro.
+      if (!retryable) {
+        pendingKeyRef.current = null
       }
-
       if (apiError?.requiresCatalogRefresh) {
         void loadProducts()
       }
 
+      setRetryableFailure(retryable)
+
+      // Destaca no carrinho o item culpado, quando o backend o identifica.
+      if (apiError?.productId !== undefined) {
+        setLineErrors({
+          [apiError.productId]: { message: apiError.message, retryable },
+        })
+      }
+
       setFeedback({
         type: 'error',
-        message: apiError?.isRetryable
-          ? `${apiError.message} Clique em Comprar novamente - a tentativa e segura e nao gera pedido duplicado.`
+        message: retryable
+          ? 'Não foi possível concluir agora. Suas escolhas estão salvas — toque em “Tentar novamente” em instantes.'
           : (apiError?.message ??
-            'Nao foi possivel concluir a compra. Tente novamente.'),
+            'Não foi possível concluir a compra. Revise os itens do carrinho.'),
       })
+      setIsCartOpen(true)
     } finally {
-      isSubmittingRef.current = false
-      setProcessingId(null)
+      setIsCheckingOut(false)
     }
+  }
+
+  const feedbackStyles: Record<Feedback['type'], string> = {
+    success: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+    error: 'border-red-200 bg-red-50 text-red-700',
   }
 
   return (
     <div className="min-h-screen bg-[#FFF8E1] px-4 py-10">
-      <Header />
+      <Header cartCount={cart.totalItems} onOpenCart={() => setIsCartOpen(true)} />
 
       <main className="mx-auto max-w-4xl">
         {feedback && (
           <p
             role="status"
-            className={`mt-5 rounded-xl border px-4 py-3 font-quicksand text-sm font-medium ${
-              feedback.type === 'success'
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                : 'border-red-200 bg-red-50 text-red-700'
-            }`}
+            className={`mt-5 rounded-xl border px-4 py-3 font-quicksand text-sm font-medium ${feedbackStyles[feedback.type]}`}
           >
             {feedback.message}
           </p>
@@ -151,15 +215,31 @@ function App() {
                 key={product.id}
                 product={product}
                 quantity={quantities[product.id] ?? 1}
-                isProcessing={processingId === product.id}
-                isDisabled={processingId !== null || product.stock < 1}
+                inCart={
+                  cart.items.find((item) => item.productId === product.id)
+                    ?.quantity ?? 0
+                }
+                isDisabled={isCheckingOut}
                 onChangeQuantity={changeQuantity}
-                onBuy={handleBuy}
+                onAddToCart={handleAddToCart}
               />
             ))}
           </div>
         )}
       </main>
+
+      <CartDrawer
+        open={isCartOpen}
+        items={cart.items}
+        totalValue={cart.totalValue}
+        isProcessing={isCheckingOut}
+        lineErrors={lineErrors}
+        hasRetryable={retryableFailure}
+        onClose={() => setIsCartOpen(false)}
+        onChangeQuantity={changeCartQuantity}
+        onRemove={removeFromCart}
+        onCheckout={handleCheckout}
+      />
     </div>
   )
 }

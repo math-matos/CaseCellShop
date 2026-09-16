@@ -28,17 +28,28 @@ POST /checkout
 
 ### 2.2 Body
 
+O carrinho inteiro vai em **uma única requisição**, na lista `items`:
+
 ```json
 {
-  "productId": 1,
-  "quantity": 2
+  "items": [
+    { "productId": 1, "quantity": 2 },
+    { "productId": 2, "quantity": 1 }
+  ]
 }
 ```
 
 | Campo | Tipo | Regra |
 | --- | --- | --- |
-| `productId` | inteiro | Obrigatório. Deve existir no catálogo. |
-| `quantity` | inteiro | Obrigatório. `>= 1`. Não aceita decimal, negativo, zero ou string. |
+| `items` | array | Obrigatório. Ao menos um item. |
+| `items[].productId` | inteiro | Obrigatório. Deve existir no catálogo. |
+| `items[].quantity` | inteiro | Obrigatório. `>= 1`. Não aceita decimal, negativo, zero ou string. |
+
+Itens repetidos com o mesmo `productId` têm as quantidades **somadas** antes de
+checar o estoque.
+
+> **Formato legado.** O corpo `{ "productId": 1, "quantity": 2 }` (um único item)
+> continua aceito e é normalizado internamente para `items` de um elemento.
 
 > **O preço nunca vem do front.** O valor unitário e o total são resolvidos pelo
 > backend a partir do catálogo. Qualquer campo de preço enviado no body é ignorado
@@ -53,17 +64,15 @@ Headers: `X-Correlation-Id: <id>`
   "orderId": "order_9f1c0f1e-4a0e-4a1e-9c2a-9a1c0f1e4a0e",
   "status": "confirmed",
   "items": [
-    {
-      "productId": 1,
-      "productName": "Capinha Azul",
-      "quantity": 2,
-      "unitPrice": 10
-    }
+    { "productId": 1, "productName": "Capinha Azul", "quantity": 2, "unitPrice": 10 },
+    { "productId": 2, "productName": "Capinha Vermelha", "quantity": 1, "unitPrice": 15 }
   ],
-  "total": 20,
+  "total": 35,
   "createdAt": "2026-09-15T12:00:00.000Z"
 }
 ```
+
+`total` é a soma de `unitPrice * quantity` de todos os itens.
 
 ### 3.1 Replay idempotente
 
@@ -73,14 +82,16 @@ O estoque é debitado **uma única vez**.
 
 ## 4. Respostas de erro
 
-Formato único para todos os erros:
+Formato único para todos os erros. Em erros de estoque/produto, o corpo traz
+também o `productId` do item culpado, para o front destacá-lo no carrinho:
 
 ```json
 {
   "error": {
     "code": "INSUFFICIENT_STOCK",
     "message": "Capinha Verde está esgotado no momento.",
-    "correlationId": "9f1c0f1e-4a0e-4a1e-9c2a-9a1c0f1e4a0e"
+    "correlationId": "9f1c0f1e-4a0e-4a1e-9c2a-9a1c0f1e4a0e",
+    "productId": 3
   }
 }
 ```
@@ -89,22 +100,26 @@ Formato único para todos os erros:
 | --- | --- | --- | --- |
 | `400` | `VALIDATION_ERROR` | `productId` ausente ou não inteiro | `Informe um produto válido para concluir a compra.` |
 | `400` | `VALIDATION_ERROR` | `quantity` zero, negativa, decimal ou não numérica | `A quantidade deve ser um número inteiro maior ou igual a 1.` |
+| `400` | `VALIDATION_ERROR` | `items` presente mas vazio | `Informe ao menos um item para concluir a compra.` |
 | `400` | `VALIDATION_ERROR` | `Idempotency-Key` ausente ou fora do formato UUID | `Informe um Idempotency-Key válido no formato UUID.` |
-| `400` | `VALIDATION_ERROR` | body ausente ou JSON malformado | `Corpo da requisição inválido. Envie um JSON com productId e quantity.` |
+| `400` | `VALIDATION_ERROR` | body ausente, `items` não-array ou JSON malformado | `Corpo da requisição inválido. Envie um JSON com a lista de items.` |
 | `401` | `UNAUTHORIZED` | `Authorization` ausente, malformado ou token inválido | `Autenticação obrigatória para concluir a compra.` |
-| `404` | `PRODUCT_NOT_FOUND` | `productId` não existe no catálogo | `Produto não encontrado.` |
+| `404` | `PRODUCT_NOT_FOUND` | algum `productId` não existe no catálogo | `Produto não encontrado.` |
 | `404` | `NOT_FOUND` | rota inexistente | `Recurso não encontrado.` |
-| `409` | `INSUFFICIENT_STOCK` | estoque zerado | `<Produto> está esgotado no momento.` |
-| `409` | `INSUFFICIENT_STOCK` | estoque menor que o pedido | `Estoque insuficiente: restam apenas N unidade(s) de <Produto>.` |
+| `409` | `INSUFFICIENT_STOCK` | algum item com estoque zerado | `<Produto> está esgotado no momento.` |
+| `409` | `INSUFFICIENT_STOCK` | algum item com estoque menor que o pedido | `Estoque insuficiente: restam apenas N unidade(s) de <Produto>.` |
 | `422` | `IDEMPOTENCY_KEY_REUSE` | mesma chave com body diferente | `Esta Idempotency-Key já foi usada com outros dados.` |
 | `500` | `SERVER_ERROR` | falha inesperada | `Erro de servidor inesperado.` |
 | `503` | `SERVICE_UNAVAILABLE` | dependência (ERP) fora do ar | `Serviço temporariamente indisponível. Tente novamente em instantes.` |
 
 ## 5. Regras de negócio
 
-1. **Atomicidade.** A verificação de estoque e o débito acontecem na mesma operação
-   síncrona (`reserveStock`), sem `await` entre elas. Duas requisições concorrentes
-   pelo último item resultam em `201` para uma e `409` para a outra — nunca estoque negativo.
+1. **Atomicidade (tudo-ou-nada).** A verificação de estoque de **todos** os itens e o
+   débito acontecem na mesma operação síncrona (`reserveStockBatch`), sem `await` entre
+   elas: primeiro valida o carrinho inteiro, só então debita. Se **qualquer** item faltar
+   estoque, nada é debitado e a compra inteira falha (`409`/`404`) — não existe pedido
+   parcial. Duas requisições concorrentes pelo último item resultam em `201` para uma e
+   `409` para a outra — nunca estoque negativo.
 2. **Ordem de validação.** Auth (`401`) → formato da `Idempotency-Key` (`400`) →
    body (`400`) → replay/conflito de chave (`201` / `422`) → dependência externa (`503`)
    → reserva de estoque (`404` / `409`).
@@ -142,3 +157,7 @@ Cada item abaixo tem um teste correspondente em `api/tests/checkout.test.ts`:
 | 9 | Sem `Authorization` / token inválido | `401 UNAUTHORIZED` |
 | 10 | Erro inesperado na camada de dados | `500 SERVER_ERROR` |
 | 11 | Preço enviado pelo cliente | ignorado; total calculado pelo catálogo |
+| 12 | Carrinho com vários itens válidos | `201` + um pedido com todos os itens; estoque de cada um debitado |
+| 13 | Um item do carrinho sem estoque | `409` com `productId`; **nenhum** item debitado (tudo-ou-nada) |
+| 14 | `items` vazio | `400 VALIDATION_ERROR` |
+| 15 | Mesma chave, itens em ordem trocada | replay do pedido original; estoque debitado uma vez |

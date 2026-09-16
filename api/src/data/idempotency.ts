@@ -1,4 +1,4 @@
-import type { Order } from '../types/index.js'
+import type { CheckoutItemInput, Order } from '../types/index.js'
 
 interface IdempotencyRecord {
   fingerprint: string
@@ -19,9 +19,16 @@ export type IdempotencyLookup =
   | { status: 'replay'; order: Order }
   | { status: 'conflict' }
 
-/** Identifica o payload da tentativa: mesma chave + payload diferente = 422. */
-export function fingerprintOf(productId: number, quantity: number): string {
-  return `${productId}:${quantity}`
+/**
+ * Identifica o payload da tentativa: mesma chave + payload diferente = 422.
+ * A ordem dos itens no carrinho nao muda o pedido, entao ordenamos antes de
+ * serializar — `[A,B]` e `[B,A]` produzem o mesmo fingerprint.
+ */
+export function fingerprintOf(items: CheckoutItemInput[]): string {
+  return items
+    .map((item) => `${item.productId}:${item.quantity}`)
+    .sort()
+    .join(',')
 }
 
 export function lookupIdempotentOrder(

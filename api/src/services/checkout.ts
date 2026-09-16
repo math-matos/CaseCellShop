@@ -4,9 +4,9 @@ import {
   lookupIdempotentOrder,
   rememberOrder,
 } from '../data/idempotency.js'
-import { reserveStock } from '../data/products.js'
+import { reserveStockBatch } from '../data/products.js'
 import { errors } from '../lib/errors.js'
-import type { CheckoutInput, Order } from '../types/index.js'
+import type { CheckoutInput, Order, OrderItem } from '../types/index.js'
 import { assertErpAvailable } from './erp.js'
 
 export interface CheckoutResult {
@@ -15,18 +15,19 @@ export interface CheckoutResult {
 }
 
 /**
- * Executa a compra seguindo a ordem definida na secao 5 da spec:
+ * Executa a compra do carrinho inteiro seguindo a ordem da secao 5 da spec:
  * replay idempotente -> dependencia externa -> reserva atomica de estoque.
  *
- * O replay vem antes da checagem do ERP de proposito: um cliente que esta
- * retentando uma requisicao ja concluida recebe o pedido original mesmo se a
- * dependencia estiver instavel naquele instante.
+ * O pedido e tudo-ou-nada: se qualquer item faltar estoque, nada e debitado e a
+ * compra inteira falha (409). O replay vem antes da checagem do ERP de
+ * proposito: um cliente que esta retentando uma requisicao ja concluida recebe
+ * o pedido original mesmo se a dependencia estiver instavel naquele instante.
  */
 export function processCheckout(
   input: CheckoutInput,
   idempotencyKey: string,
 ): CheckoutResult {
-  const fingerprint = fingerprintOf(input.productId, input.quantity)
+  const fingerprint = fingerprintOf(input.items)
   const cached = lookupIdempotentOrder(idempotencyKey, fingerprint)
 
   if (cached.status === 'conflict') {
@@ -39,33 +40,31 @@ export function processCheckout(
 
   assertErpAvailable()
 
-  const reservation = reserveStock(input.productId, input.quantity)
+  const reservation = reserveStockBatch(input.items)
 
   if (!reservation.ok) {
     if (reservation.reason === 'PRODUCT_NOT_FOUND') {
-      throw errors.productNotFound()
+      throw errors.productNotFound(reservation.productId)
     }
 
     const { product } = reservation
     throw product.stock > 0
-      ? errors.insufficientStock(product.name, product.stock)
-      : errors.outOfStock(product.name)
+      ? errors.insufficientStock(product.name, product.stock, product.id)
+      : errors.outOfStock(product.name, product.id)
   }
 
-  const { product } = reservation
+  const items: OrderItem[] = reservation.lines.map((line) => ({
+    productId: line.product.id,
+    productName: line.product.name,
+    quantity: line.quantity,
+    unitPrice: line.product.value,
+  }))
 
   const order: Order = {
     orderId: `order_${randomUUID()}`,
     status: 'confirmed',
-    items: [
-      {
-        productId: product.id,
-        productName: product.name,
-        quantity: input.quantity,
-        unitPrice: product.value,
-      },
-    ],
-    total: product.value * input.quantity,
+    items,
+    total: items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0),
     createdAt: new Date().toISOString(),
   }
 

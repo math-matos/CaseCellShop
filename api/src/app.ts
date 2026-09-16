@@ -78,6 +78,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
         code: appError.code,
         message: appError.message,
         correlationId: request.correlationId,
+        ...(appError.productId !== undefined
+          ? { productId: appError.productId }
+          : {}),
       },
     }
 
